@@ -11,6 +11,7 @@ const API_KEY = 'test-api-key-12345';
 const OAUTH_CLIENT_ID = process.env.OAUTH_CLIENT_ID || 'test-client-id';
 const OAUTH_CLIENT_SECRET = process.env.OAUTH_CLIENT_SECRET || 'test-client-secret';
 const OAUTH_TOKENS = new Map(); // In-memory token storage
+const OAUTH_AUTH_CODES = new Map(); // In-memory authorization code storage
 
 app.use(express.json());
 
@@ -78,39 +79,185 @@ function authenticate(req, res, next) {
   return authenticateApiKey(req, res, next);
 }
 
+// OAuth authorization endpoint (Authorization Code Grant)
+app.get('/oauth/authorize', (req, res) => {
+  const { client_id, redirect_uri, response_type, scope, state } = req.query;
+  
+  console.log('OAuth authorize request:', { client_id, redirect_uri, response_type, scope, state });
+  
+  if (response_type !== 'code') {
+    return res.status(400).send('Invalid response_type. Expected: code');
+  }
+  
+  if (client_id !== OAUTH_CLIENT_ID) {
+    return res.status(400).send('Invalid client_id');
+  }
+  
+  // Show simple login form
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head><title>MCP Test Server - Login</title></head>
+    <body style="font-family: sans-serif; max-width: 400px; margin: 50px auto; padding: 20px;">
+      <h2>MCP Test Server Login</h2>
+      <p>Authorize access for client: <strong>${client_id}</strong></p>
+      <form method="POST" action="/oauth/authorize">
+        <input type="hidden" name="client_id" value="${client_id}">
+        <input type="hidden" name="redirect_uri" value="${redirect_uri || ''}">
+        <input type="hidden" name="scope" value="${scope || ''}">
+        <input type="hidden" name="state" value="${state || ''}">
+        <p><label>Username: <input type="text" name="username" value="testuser"></label></p>
+        <p><label>Password: <input type="password" name="password" value="testpass"></label></p>
+        <p><button type="submit" style="padding: 10px 20px;">Authorize</button></p>
+      </form>
+    </body>
+    </html>
+  `);
+});
+
+app.post('/oauth/authorize', (req, res) => {
+  const { client_id, redirect_uri, scope, state, username, password } = req.body;
+  
+  console.log('OAuth authorize POST:', { client_id, redirect_uri, scope, state, username });
+  
+  // Simple credential check (accept any non-empty username/password for testing)
+  if (!username || !password) {
+    return res.status(401).send('Invalid credentials');
+  }
+  
+  // Generate authorization code
+  const code = 'authcode_' + Math.random().toString(36).substring(2) + Date.now().toString(36);
+  
+  OAUTH_AUTH_CODES.set(code, {
+    clientId: client_id,
+    redirectUri: redirect_uri,
+    scope: scope || '',
+    expiresAt: Date.now() + 600000 // 10 minutes
+  });
+  
+  console.log('Authorization code issued:', code);
+  
+  // Redirect back with code
+  const redirectUrl = new URL(redirect_uri);
+  redirectUrl.searchParams.set('code', code);
+  if (state) redirectUrl.searchParams.set('state', state);
+  
+  res.redirect(redirectUrl.toString());
+});
+
 // OAuth token endpoint
 app.post('/oauth/token', (req, res) => {
-  const { grant_type, client_id, client_secret, scope } = req.body;
+  const { grant_type, client_id, client_secret, scope, code, redirect_uri } = req.body;
   
-  console.log('OAuth token request:', { grant_type, client_id, scope });
-  
-  if (grant_type !== 'client_credentials') {
-    return res.status(400).json({ error: 'unsupported_grant_type' });
-  }
+  console.log('OAuth token request:', { grant_type, client_id, scope, code });
   
   if (client_id !== OAUTH_CLIENT_ID || client_secret !== OAUTH_CLIENT_SECRET) {
     return res.status(401).json({ error: 'invalid_client' });
   }
   
-  // Generate token
-  const token = 'mcp_' + Math.random().toString(36).substring(2) + Date.now().toString(36);
-  const expiresIn = 3600; // 1 hour
-  const expiresAt = Date.now() + (expiresIn * 1000);
+  if (grant_type === 'authorization_code') {
+    // Authorization Code Grant
+    const codeData = OAUTH_AUTH_CODES.get(code);
+    
+    if (!codeData) {
+      return res.status(400).json({ error: 'invalid_grant', error_description: 'Invalid authorization code' });
+    }
+    
+    if (Date.now() > codeData.expiresAt) {
+      OAUTH_AUTH_CODES.delete(code);
+      return res.status(400).json({ error: 'invalid_grant', error_description: 'Authorization code expired' });
+    }
+    
+    // Consume the code (one-time use)
+    OAUTH_AUTH_CODES.delete(code);
+    
+    // Generate tokens
+    const token = 'mcp_' + Math.random().toString(36).substring(2) + Date.now().toString(36);
+    const refreshToken = 'refresh_' + Math.random().toString(36).substring(2) + Date.now().toString(36);
+    const expiresIn = 3600;
+    
+    OAUTH_TOKENS.set(token, {
+      clientId: client_id,
+      scope: codeData.scope,
+      refreshToken,
+      expiresAt: Date.now() + (expiresIn * 1000)
+    });
+    
+    console.log('Token issued (auth code):', token);
+    
+    return res.json({
+      access_token: token,
+      token_type: 'Bearer',
+      expires_in: expiresIn,
+      refresh_token: refreshToken,
+      scope: codeData.scope
+    });
+  }
   
-  OAUTH_TOKENS.set(token, {
-    clientId: client_id,
-    scope: scope || '',
-    expiresAt
-  });
+  if (grant_type === 'client_credentials') {
+    // Client Credentials Grant
+    const token = 'mcp_' + Math.random().toString(36).substring(2) + Date.now().toString(36);
+    const expiresIn = 3600;
+    
+    OAUTH_TOKENS.set(token, {
+      clientId: client_id,
+      scope: scope || '',
+      expiresAt: Date.now() + (expiresIn * 1000)
+    });
+    
+    console.log('Token issued (client creds):', token);
+    
+    return res.json({
+      access_token: token,
+      token_type: 'Bearer',
+      expires_in: expiresIn,
+      scope: scope || ''
+    });
+  }
   
-  console.log('Token issued:', token);
+  if (grant_type === 'refresh_token') {
+    const { refresh_token } = req.body;
+    
+    // Find token by refresh token
+    let foundEntry = null;
+    for (const [token, data] of OAUTH_TOKENS.entries()) {
+      if (data.refreshToken === refresh_token) {
+        foundEntry = { token, data };
+        break;
+      }
+    }
+    
+    if (!foundEntry) {
+      return res.status(400).json({ error: 'invalid_grant', error_description: 'Invalid refresh token' });
+    }
+    
+    // Delete old token
+    OAUTH_TOKENS.delete(foundEntry.token);
+    
+    // Generate new tokens
+    const newToken = 'mcp_' + Math.random().toString(36).substring(2) + Date.now().toString(36);
+    const newRefreshToken = 'refresh_' + Math.random().toString(36).substring(2) + Date.now().toString(36);
+    const expiresIn = 3600;
+    
+    OAUTH_TOKENS.set(newToken, {
+      clientId: client_id,
+      scope: foundEntry.data.scope,
+      refreshToken: newRefreshToken,
+      expiresAt: Date.now() + (expiresIn * 1000)
+    });
+    
+    console.log('Token refreshed:', newToken);
+    
+    return res.json({
+      access_token: newToken,
+      token_type: 'Bearer',
+      expires_in: expiresIn,
+      refresh_token: newRefreshToken,
+      scope: foundEntry.data.scope
+    });
+  }
   
-  res.json({
-    access_token: token,
-    token_type: 'Bearer',
-    expires_in: expiresIn,
-    scope: scope || ''
-  });
+  return res.status(400).json({ error: 'unsupported_grant_type' });
 });
 
 // Health check endpoint (no auth required)
@@ -203,20 +350,17 @@ app.listen(PORT, () => {
   console.log(`   Server URL: http://localhost:${PORT}/mcp`);
   console.log(`   API Key: ${API_KEY}`);
   console.log(`   Header Name: X-API-Key (or Authorization)`);
-  console.log(`\n📋 OAuth 2.0 Configuration:`);
+  console.log(`\n📋 OAuth 2.0 Client Credentials:`);
   console.log(`   Server URL: http://localhost:${PORT}/mcp`);
   console.log(`   Token URL: http://localhost:${PORT}/oauth/token`);
   console.log(`   Client ID: ${OAUTH_CLIENT_ID}`);
   console.log(`   Client Secret: ${OAUTH_CLIENT_SECRET}`);
+  console.log(`\n📋 OAuth 2.0 Authorization Code:`);
+  console.log(`   Server URL: http://localhost:${PORT}/mcp`);
+  console.log(`   Auth URL: http://localhost:${PORT}/oauth/authorize`);
+  console.log(`   Token URL: http://localhost:${PORT}/oauth/token`);
+  console.log(`   Client ID: ${OAUTH_CLIENT_ID}`);
+  console.log(`   Client Secret: ${OAUTH_CLIENT_SECRET}`);
+  console.log(`   Test credentials: testuser / testpass`);
   console.log(`\n✅ Health check: http://localhost:${PORT}/health`);
-  console.log(`\n🔑 Test with curl (API Key):`);
-  console.log(`   curl -X POST http://localhost:${PORT}/mcp \\`);
-  console.log(`     -H "X-API-Key: ${API_KEY}" \\`);
-  console.log(`     -H "Content-Type: application/json" \\`);
-  console.log(`     -H "Accept: text/event-stream"`);
-  console.log(`\n🔑 Test with curl (OAuth):`);
-  console.log(`   # Get token:`);
-  console.log(`   curl -X POST http://localhost:${PORT}/oauth/token \\`);
-  console.log(`     -H "Content-Type: application/x-www-form-urlencoded" \\`);
-  console.log(`     -d "grant_type=client_credentials&client_id=${OAUTH_CLIENT_ID}&client_secret=${OAUTH_CLIENT_SECRET}"`);
 });
