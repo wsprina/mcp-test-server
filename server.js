@@ -10,6 +10,8 @@ const API_KEY = 'test-api-key-12345';
 // OAuth configuration
 const OAUTH_CLIENT_ID = process.env.OAUTH_CLIENT_ID || 'test-client-id';
 const OAUTH_CLIENT_SECRET = process.env.OAUTH_CLIENT_SECRET || 'test-client-secret';
+const OAUTH_TEST_USERNAME = 'testuser';
+const OAUTH_TEST_PASSWORD = 'testpass';
 const OAUTH_TOKENS = new Map(); // In-memory token storage
 const OAUTH_AUTH_CODES = new Map(); // In-memory authorization code storage
 
@@ -85,6 +87,10 @@ app.get('/oauth/authorize', (req, res) => {
   
   console.log('OAuth authorize request:', { client_id, redirect_uri, response_type, scope, state });
   
+  if (!redirect_uri) {
+    return res.status(400).send('Missing required parameter: redirect_uri');
+  }
+  
   if (response_type !== 'code') {
     return res.status(400).send('Invalid response_type. Expected: code');
   }
@@ -120,8 +126,15 @@ app.post('/oauth/authorize', (req, res) => {
   
   console.log('OAuth authorize POST:', { client_id, redirect_uri, scope, state, username });
   
-  // Simple credential check (accept any non-empty username/password for testing)
-  if (!username || !password) {
+  if (!redirect_uri) {
+    return res.status(400).send('Missing required parameter: redirect_uri');
+  }
+  
+  if (client_id !== OAUTH_CLIENT_ID) {
+    return res.status(400).send('Invalid client_id');
+  }
+  
+  if (username !== OAUTH_TEST_USERNAME || password !== OAUTH_TEST_PASSWORD) {
     return res.status(401).send('Invalid credentials');
   }
   
@@ -166,6 +179,11 @@ app.post('/oauth/token', (req, res) => {
     if (Date.now() > codeData.expiresAt) {
       OAUTH_AUTH_CODES.delete(code);
       return res.status(400).json({ error: 'invalid_grant', error_description: 'Authorization code expired' });
+    }
+    
+    // Validate redirect_uri matches the one used in authorization request (RFC 6749 Section 4.1.3)
+    if (redirect_uri !== codeData.redirectUri) {
+      return res.status(400).json({ error: 'invalid_grant', error_description: 'redirect_uri mismatch' });
     }
     
     // Consume the code (one-time use)
