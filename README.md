@@ -11,14 +11,14 @@ A simple MCP server with **API Key**, **OAuth 2.0 Client Credentials**, and **OA
 ### 1. API Key Authentication
 | Setting | Value |
 |---------|-------|
-| Server URL | `https://web-production-80ec7.up.railway.app/mcp` |
+| SSE URL | `https://web-production-80ec7.up.railway.app/sse` |
 | API Key | `test-api-key-12345` |
 | Header | `X-API-Key` or `Authorization: Bearer` |
 
 ### 2. OAuth 2.0 Client Credentials
 | Setting | Value |
 |---------|-------|
-| Server URL | `https://web-production-80ec7.up.railway.app/mcp` |
+| SSE URL | `https://web-production-80ec7.up.railway.app/sse` |
 | Token URL | `https://web-production-80ec7.up.railway.app/oauth/token` |
 | Client ID | `test-client-id` |
 | Client Secret | `test-client-secret` |
@@ -27,7 +27,7 @@ A simple MCP server with **API Key**, **OAuth 2.0 Client Credentials**, and **OA
 ### 3. OAuth 2.0 Authorization Code
 | Setting | Value |
 |---------|-------|
-| Server URL | `https://web-production-80ec7.up.railway.app/mcp` |
+| SSE URL | `https://web-production-80ec7.up.railway.app/sse` |
 | Authorization URL | `https://web-production-80ec7.up.railway.app/oauth/authorize` |
 | Token URL | `https://web-production-80ec7.up.railway.app/oauth/token` |
 | Client ID | `test-client-id` |
@@ -53,9 +53,8 @@ curl https://web-production-80ec7.up.railway.app/health
 
 ### API Key Auth
 ```bash
-curl -X POST https://web-production-80ec7.up.railway.app/mcp \
-  -H "X-API-Key: test-api-key-12345" \
-  -H "Content-Type: application/json"
+curl -N https://web-production-80ec7.up.railway.app/sse \
+  -H "X-API-Key: test-api-key-12345"
 ```
 
 ### OAuth Client Credentials
@@ -65,10 +64,9 @@ curl -X POST https://web-production-80ec7.up.railway.app/oauth/token \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "grant_type=client_credentials&client_id=test-client-id&client_secret=test-client-secret"
 
-# Use token
-curl -X POST https://web-production-80ec7.up.railway.app/mcp \
-  -H "Authorization: Bearer <TOKEN>" \
-  -H "Content-Type: application/json"
+# Connect to SSE
+curl -N https://web-production-80ec7.up.railway.app/sse \
+  -H "Authorization: Bearer <TOKEN>"
 ```
 
 ### OAuth Authorization Code

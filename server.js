@@ -358,35 +358,50 @@ mcpServer.setRequestHandler(ListResourcesRequestSchema, async () => {
   };
 });
 
-// MCP SSE endpoint with API key authentication
-app.post('/mcp', authenticate, async (req, res) => {
-  console.log('MCP connection request received');
-  console.log('Headers:', req.headers);
+// Store active transports by session ID
+const transports = new Map();
+
+// SSE endpoint - client connects here to receive server messages
+app.get('/sse', authenticate, async (req, res) => {
+  console.log('SSE connection request received');
   
-  // Set SSE headers immediately so client knows connection is established
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders(); // Force headers to be sent immediately
+  const transport = new SSEServerTransport('/messages', res);
+  transports.set(transport.sessionId, transport);
   
-  const transport = new SSEServerTransport('/mcp', res);
+  res.on('close', () => {
+    transports.delete(transport.sessionId);
+    console.log('SSE connection closed:', transport.sessionId);
+  });
+  
   await mcpServer.connect(transport);
-  console.log('MCP server connected via SSE');
+  console.log('MCP server connected, session:', transport.sessionId);
+});
+
+// Messages endpoint - client POSTs messages here
+app.post('/messages', authenticate, async (req, res) => {
+  const sessionId = req.query.sessionId;
+  const transport = transports.get(sessionId);
+  
+  if (!transport) {
+    return res.status(400).json({ error: 'Invalid or missing session ID' });
+  }
+  
+  await transport.handlePostMessage(req, res);
 });
 
 app.listen(PORT, () => {
   console.log(`\n🚀 MCP Test Server running on http://localhost:${PORT}`);
   console.log(`\n📋 API Key Configuration:`);
-  console.log(`   Server URL: http://localhost:${PORT}/mcp`);
+  console.log(`   SSE URL: http://localhost:${PORT}/sse`);
   console.log(`   API Key: ${API_KEY}`);
   console.log(`   Header Name: X-API-Key (or Authorization)`);
   console.log(`\n📋 OAuth 2.0 Client Credentials:`);
-  console.log(`   Server URL: http://localhost:${PORT}/mcp`);
+  console.log(`   SSE URL: http://localhost:${PORT}/sse`);
   console.log(`   Token URL: http://localhost:${PORT}/oauth/token`);
   console.log(`   Client ID: ${OAUTH_CLIENT_ID}`);
   console.log(`   Client Secret: ${OAUTH_CLIENT_SECRET}`);
   console.log(`\n📋 OAuth 2.0 Authorization Code:`);
-  console.log(`   Server URL: http://localhost:${PORT}/mcp`);
+  console.log(`   SSE URL: http://localhost:${PORT}/sse`);
   console.log(`   Auth URL: http://localhost:${PORT}/oauth/authorize`);
   console.log(`   Token URL: http://localhost:${PORT}/oauth/token`);
   console.log(`   Client ID: ${OAUTH_CLIENT_ID}`);
