@@ -361,16 +361,15 @@ mcpServer.setRequestHandler(ListResourcesRequestSchema, async () => {
 // Store active transports by session ID
 const transports = new Map();
 
-// SSE endpoint - client connects here to receive server messages
-app.get('/sse', authenticate, async (req, res) => {
-  console.log('SSE connection request received');
-  
-  const transport = new SSEServerTransport('/messages', res);
+// SSE endpoint - client connects here to establish stream
+app.get('/mcp', authenticate, async (req, res) => {
+  console.log('MCP SSE connection request received');
+  const transport = new SSEServerTransport('/message', res);
   transports.set(transport.sessionId, transport);
   
   res.on('close', () => {
     transports.delete(transport.sessionId);
-    console.log('SSE connection closed:', transport.sessionId);
+    console.log('MCP connection closed:', transport.sessionId);
   });
   
   await mcpServer.connect(transport);
@@ -378,7 +377,7 @@ app.get('/sse', authenticate, async (req, res) => {
 });
 
 // Messages endpoint - client POSTs messages here
-app.post('/messages', authenticate, async (req, res) => {
+app.post('/message', authenticate, async (req, res) => {
   const sessionId = req.query.sessionId;
   const transport = transports.get(sessionId);
   
@@ -392,16 +391,16 @@ app.post('/messages', authenticate, async (req, res) => {
 app.listen(PORT, () => {
   console.log(`\n🚀 MCP Test Server running on http://localhost:${PORT}`);
   console.log(`\n📋 API Key Configuration:`);
-  console.log(`   SSE URL: http://localhost:${PORT}/sse`);
+  console.log(`   MCP URL: http://localhost:${PORT}/mcp`);
   console.log(`   API Key: ${API_KEY}`);
   console.log(`   Header Name: X-API-Key (or Authorization)`);
   console.log(`\n📋 OAuth 2.0 Client Credentials:`);
-  console.log(`   SSE URL: http://localhost:${PORT}/sse`);
+  console.log(`   MCP URL: http://localhost:${PORT}/mcp`);
   console.log(`   Token URL: http://localhost:${PORT}/oauth/token`);
   console.log(`   Client ID: ${OAUTH_CLIENT_ID}`);
   console.log(`   Client Secret: ${OAUTH_CLIENT_SECRET}`);
   console.log(`\n📋 OAuth 2.0 Authorization Code:`);
-  console.log(`   SSE URL: http://localhost:${PORT}/sse`);
+  console.log(`   MCP URL: http://localhost:${PORT}/mcp`);
   console.log(`   Auth URL: http://localhost:${PORT}/oauth/authorize`);
   console.log(`   Token URL: http://localhost:${PORT}/oauth/token`);
   console.log(`   Client ID: ${OAUTH_CLIENT_ID}`);
