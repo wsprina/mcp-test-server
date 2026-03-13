@@ -295,68 +295,71 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', message: 'MCP Test Server is running' });
 });
 
-// Create MCP server instance once
-const mcpServer = new Server(
-  {
-    name: 'test-mcp-server',
-    version: '1.0.0',
-  },
-  {
-    capabilities: {
-      tools: {},
-      resources: {},
+// Factory function to create MCP server instance per connection
+function createMcpServer() {
+  const server = new Server(
+    {
+      name: 'test-mcp-server',
+      version: '1.0.0',
     },
-  }
-);
-
-// Register handlers once
-mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
-  return {
-    tools: [
-      {
-        name: 'echo',
-        description: 'Echoes back the input',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            message: {
-              type: 'string',
-              description: 'Message to echo',
-            },
-          },
-          required: ['message'],
-        },
+    {
+      capabilities: {
+        tools: {},
+        resources: {},
       },
-    ],
-  };
-});
+    }
+  );
 
-mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
-  if (request.params.name === 'echo') {
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
     return {
-      content: [
+      tools: [
         {
-          type: 'text',
-          text: `Echo: ${request.params.arguments.message}`,
+          name: 'echo',
+          description: 'Echoes back the input',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              message: {
+                type: 'string',
+                description: 'Message to echo',
+              },
+            },
+            required: ['message'],
+          },
         },
       ],
     };
-  }
-  throw new Error(`Unknown tool: ${request.params.name}`);
-});
+  });
 
-mcpServer.setRequestHandler(ListResourcesRequestSchema, async () => {
-  return {
-    resources: [
-      {
-        uri: 'test://example',
-        name: 'Example Resource',
-        description: 'A test resource',
-        mimeType: 'text/plain',
-      },
-    ],
-  };
-});
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    if (request.params.name === 'echo') {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Echo: ${request.params.arguments.message}`,
+          },
+        ],
+      };
+    }
+    throw new Error(`Unknown tool: ${request.params.name}`);
+  });
+
+  server.setRequestHandler(ListResourcesRequestSchema, async () => {
+    return {
+      resources: [
+        {
+          uri: 'test://example',
+          name: 'Example Resource',
+          description: 'A test resource',
+          mimeType: 'text/plain',
+        },
+      ],
+    };
+  });
+
+  return server;
+}
 
 // Store active transports by session ID
 const transports = new Map();
@@ -365,30 +368,34 @@ const transports = new Map();
 app.get('/sse', authenticate, async (req, res) => {
   console.log('SSE connection request received');
   const transport = new SSEServerTransport('/message', res);
-  transports.set(transport.sessionId, transport);
+  const sessionId = transport.sessionId;
+  transports.set(sessionId, transport);
   
-  res.on('close', () => {
-    transports.delete(transport.sessionId);
-    console.log('SSE connection closed:', transport.sessionId);
-  });
+  transport.onclose = () => {
+    console.log('SSE transport closed:', sessionId);
+    transports.delete(sessionId);
+  };
   
-  await mcpServer.connect(transport);
-  console.log('MCP server connected, session:', transport.sessionId);
+  const server = createMcpServer();
+  await server.connect(transport);
+  console.log('MCP server connected, session:', sessionId);
 });
 
 // MCP endpoint - alias for /sse
 app.get('/mcp', authenticate, async (req, res) => {
   console.log('MCP SSE connection request received');
   const transport = new SSEServerTransport('/message', res);
-  transports.set(transport.sessionId, transport);
+  const sessionId = transport.sessionId;
+  transports.set(sessionId, transport);
   
-  res.on('close', () => {
-    transports.delete(transport.sessionId);
-    console.log('MCP connection closed:', transport.sessionId);
-  });
+  transport.onclose = () => {
+    console.log('MCP transport closed:', sessionId);
+    transports.delete(sessionId);
+  };
   
-  await mcpServer.connect(transport);
-  console.log('MCP server connected, session:', transport.sessionId);
+  const server = createMcpServer();
+  await server.connect(transport);
+  console.log('MCP server connected, session:', sessionId);
 });
 
 // Messages endpoint - client POSTs messages here
