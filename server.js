@@ -1,6 +1,8 @@
 import express from 'express';
+import { randomUUID } from 'crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { ListToolsRequestSchema, CallToolRequestSchema, ListResourcesRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
 const app = express();
@@ -395,9 +397,9 @@ app.get('/sse', authenticate, async (req, res) => {
   console.log('MCP server connected, session:', transport.sessionId);
 });
 
-// MCP endpoint - alias for /sse
+// MCP endpoint - alias for /sse (HTTP+SSE transport)
 app.get('/mcp', authenticate, async (req, res) => {
-  console.log('MCP connection request received');
+  console.log('MCP SSE connection request received');
   
   const transport = new SSEServerTransport('/messages', res);
   transports.set(transport.sessionId, transport);
@@ -412,7 +414,7 @@ app.get('/mcp', authenticate, async (req, res) => {
   console.log('MCP server connected, session:', transport.sessionId);
 });
 
-// Messages endpoint - client POSTs messages here
+// Messages endpoint - client POSTs messages here (HTTP+SSE transport)
 app.post('/messages', authenticate, async (req, res) => {
   const sessionId = req.query.sessionId;
   const transport = transports.get(sessionId);
@@ -421,22 +423,114 @@ app.post('/messages', authenticate, async (req, res) => {
     return res.status(400).json({ error: 'Invalid or missing session ID' });
   }
   
-  await transport.handlePostMessage(req, res);
+  await transport.handlePostMessage(req, res, req.body);
+});
+
+// POST to /sse - for HTTP+SSE transport message handling
+app.post('/sse', authenticate, async (req, res) => {
+  const sessionId = req.query.sessionId;
+  const transport = transports.get(sessionId);
+  
+  if (!transport) {
+    return res.status(400).json({ error: 'Invalid or missing session ID' });
+  }
+  
+  await transport.handlePostMessage(req, res, req.body);
+});
+
+// Streamable HTTP transport - stores transports by session ID
+const streamableTransports = new Map();
+
+// POST /mcp - Streamable HTTP transport (handles both init and messages)
+app.post('/mcp', authenticate, async (req, res) => {
+  // APPIAN PLUGIN WORKAROUND: The Appian MCP Connected System plugin doesn't send
+  // the required "Accept: application/json, text/event-stream" header.
+  // We inject it here to satisfy the MCP Streamable HTTP spec validation.
+  if (!req.headers['accept']?.includes('text/event-stream')) {
+    const accept = 'application/json, text/event-stream';
+    req.headers['accept'] = accept;
+    const idx = req.rawHeaders.findIndex(h => h.toLowerCase() === 'accept');
+    if (idx >= 0) {
+      req.rawHeaders[idx + 1] = accept;
+    } else {
+      req.rawHeaders.push('Accept', accept);
+    }
+  }
+  
+  const sessionId = req.headers['mcp-session-id'];
+  
+  // Existing session - route to existing transport
+  if (sessionId && streamableTransports.has(sessionId)) {
+    const transport = streamableTransports.get(sessionId);
+    await transport.handleRequest(req, res, req.body);
+    return;
+  }
+  
+  // New session - create transport
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: () => randomUUID(),
+  });
+  
+  transport.onclose = () => {
+    if (transport.sessionId) {
+      streamableTransports.delete(transport.sessionId);
+      console.log('Streamable HTTP session closed:', transport.sessionId);
+    }
+  };
+  
+  const server = createMcpServer();
+  await server.connect(transport);
+  
+  // Store after connect so sessionId is set
+  if (transport.sessionId) {
+    streamableTransports.set(transport.sessionId, transport);
+    console.log('Streamable HTTP session created:', transport.sessionId);
+  }
+  
+  await transport.handleRequest(req, res, req.body);
+});
+
+// GET /mcp - Streamable HTTP transport (for SSE stream reconnection)
+app.get('/mcp', authenticate, async (req, res) => {
+  const sessionId = req.headers['mcp-session-id'];
+  
+  if (!sessionId || !streamableTransports.has(sessionId)) {
+    return res.status(400).json({ error: 'Invalid or missing session ID' });
+  }
+  
+  const transport = streamableTransports.get(sessionId);
+  await transport.handleRequest(req, res);
+});
+
+// DELETE /mcp - Streamable HTTP transport (session termination)
+app.delete('/mcp', authenticate, async (req, res) => {
+  const sessionId = req.headers['mcp-session-id'];
+  
+  if (!sessionId || !streamableTransports.has(sessionId)) {
+    return res.status(404).json({ error: 'Session not found' });
+  }
+  
+  const transport = streamableTransports.get(sessionId);
+  await transport.close();
+  streamableTransports.delete(sessionId);
+  
+  res.status(200).json({ message: 'Session terminated' });
 });
 
 app.listen(PORT, () => {
   console.log(`\n🚀 MCP Test Server running on http://localhost:${PORT}`);
-  console.log(`\n📋 API Key Configuration:`);
+  console.log(`\n📋 Streamable HTTP Transport (recommended):`);
+  console.log(`   URL: http://localhost:${PORT}/mcp`);
+  console.log(`\n📋 HTTP+SSE Transport (legacy):`);
   console.log(`   SSE URL: http://localhost:${PORT}/sse`);
+  console.log(`\n📋 API Key Authentication:`);
   console.log(`   API Key: ${API_KEY}`);
   console.log(`   Header Name: X-API-Key (or Authorization)`);
   console.log(`\n📋 OAuth 2.0 Client Credentials:`);
-  console.log(`   SSE URL: http://localhost:${PORT}/sse`);
   console.log(`   Token URL: http://localhost:${PORT}/oauth/token`);
   console.log(`   Client ID: ${OAUTH_CLIENT_ID}`);
   console.log(`   Client Secret: ${OAUTH_CLIENT_SECRET}`);
   console.log(`\n📋 OAuth 2.0 Authorization Code:`);
-  console.log(`   SSE URL: http://localhost:${PORT}/sse`);
   console.log(`   Auth URL: http://localhost:${PORT}/oauth/authorize`);
   console.log(`   Token URL: http://localhost:${PORT}/oauth/token`);
   console.log(`   Client ID: ${OAUTH_CLIENT_ID}`);
