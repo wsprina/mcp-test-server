@@ -376,8 +376,35 @@ app.get('/mcp', authenticate, async (req, res) => {
   console.log('MCP server connected, session:', transport.sessionId);
 });
 
+// Legacy SSE endpoint (alias for /mcp)
+app.get('/sse', authenticate, async (req, res) => {
+  console.log('SSE connection request received');
+  const transport = new SSEServerTransport('/messages', res);
+  transports.set(transport.sessionId, transport);
+  
+  res.on('close', () => {
+    transports.delete(transport.sessionId);
+    console.log('SSE connection closed:', transport.sessionId);
+  });
+  
+  await mcpServer.connect(transport);
+  console.log('MCP server connected, session:', transport.sessionId);
+});
+
 // Messages endpoint - client POSTs messages here
 app.post('/message', authenticate, async (req, res) => {
+  const sessionId = req.query.sessionId;
+  const transport = transports.get(sessionId);
+  
+  if (!transport) {
+    return res.status(400).json({ error: 'Invalid or missing session ID' });
+  }
+  
+  await transport.handlePostMessage(req, res);
+});
+
+// Legacy messages endpoint (for /sse clients)
+app.post('/messages', authenticate, async (req, res) => {
   const sessionId = req.query.sessionId;
   const transport = transports.get(sessionId);
   
