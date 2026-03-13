@@ -362,6 +362,21 @@ mcpServer.setRequestHandler(ListResourcesRequestSchema, async () => {
 const transports = new Map();
 
 // SSE endpoint - client connects here to establish stream
+app.get('/sse', authenticate, async (req, res) => {
+  console.log('SSE connection request received');
+  const transport = new SSEServerTransport('/message', res);
+  transports.set(transport.sessionId, transport);
+  
+  res.on('close', () => {
+    transports.delete(transport.sessionId);
+    console.log('SSE connection closed:', transport.sessionId);
+  });
+  
+  await mcpServer.connect(transport);
+  console.log('MCP server connected, session:', transport.sessionId);
+});
+
+// MCP endpoint - alias for /sse
 app.get('/mcp', authenticate, async (req, res) => {
   console.log('MCP SSE connection request received');
   const transport = new SSEServerTransport('/message', res);
@@ -370,21 +385,6 @@ app.get('/mcp', authenticate, async (req, res) => {
   res.on('close', () => {
     transports.delete(transport.sessionId);
     console.log('MCP connection closed:', transport.sessionId);
-  });
-  
-  await mcpServer.connect(transport);
-  console.log('MCP server connected, session:', transport.sessionId);
-});
-
-// Legacy SSE endpoint (alias for /mcp)
-app.get('/sse', authenticate, async (req, res) => {
-  console.log('SSE connection request received');
-  const transport = new SSEServerTransport('/messages', res);
-  transports.set(transport.sessionId, transport);
-  
-  res.on('close', () => {
-    transports.delete(transport.sessionId);
-    console.log('SSE connection closed:', transport.sessionId);
   });
   
   await mcpServer.connect(transport);
@@ -403,31 +403,19 @@ app.post('/message', authenticate, async (req, res) => {
   await transport.handlePostMessage(req, res);
 });
 
-// Legacy messages endpoint (for /sse clients)
-app.post('/messages', authenticate, async (req, res) => {
-  const sessionId = req.query.sessionId;
-  const transport = transports.get(sessionId);
-  
-  if (!transport) {
-    return res.status(400).json({ error: 'Invalid or missing session ID' });
-  }
-  
-  await transport.handlePostMessage(req, res);
-});
-
 app.listen(PORT, () => {
   console.log(`\n🚀 MCP Test Server running on http://localhost:${PORT}`);
   console.log(`\n📋 API Key Configuration:`);
-  console.log(`   MCP URL: http://localhost:${PORT}/mcp`);
+  console.log(`   SSE URL: http://localhost:${PORT}/sse`);
   console.log(`   API Key: ${API_KEY}`);
   console.log(`   Header Name: X-API-Key (or Authorization)`);
   console.log(`\n📋 OAuth 2.0 Client Credentials:`);
-  console.log(`   MCP URL: http://localhost:${PORT}/mcp`);
+  console.log(`   SSE URL: http://localhost:${PORT}/sse`);
   console.log(`   Token URL: http://localhost:${PORT}/oauth/token`);
   console.log(`   Client ID: ${OAUTH_CLIENT_ID}`);
   console.log(`   Client Secret: ${OAUTH_CLIENT_SECRET}`);
   console.log(`\n📋 OAuth 2.0 Authorization Code:`);
-  console.log(`   MCP URL: http://localhost:${PORT}/mcp`);
+  console.log(`   SSE URL: http://localhost:${PORT}/sse`);
   console.log(`   Auth URL: http://localhost:${PORT}/oauth/authorize`);
   console.log(`   Token URL: http://localhost:${PORT}/oauth/token`);
   console.log(`   Client ID: ${OAUTH_CLIENT_ID}`);
